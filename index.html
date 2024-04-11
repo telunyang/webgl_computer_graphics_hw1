@@ -1,0 +1,971 @@
+<html>
+
+<head>
+<title>ICG WebGL &mdash; HW1</title>
+<meta http-equiv="content-type" content="text/html; charset=utf-8">
+
+<script type="text/javascript" src="./js/glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="./js/webgl-utils.js"></script>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+
+<!-- 
+    TODO HERE:
+    modify vertex shader or write another one
+    to implement flat, gouraud and phong shading
+
+    NOTE:
+    if you want to write bonus part (texture mapping),
+    only Teapot.json has extra attribute "vertexTextureCoords"
+    which is used for texture mappping.
+ -->
+
+<!-- 
+* 程式中，我們在 vertex shaders 用到的 OpenGL Shading Language (GLSL) 變數有:
+* aVertexPosition: 用來儲存模型的頂點位置
+* aVertexNormal: 用來儲存模型的頂點法向量
+* aTextureCoord: 用來儲存模型的材質座標
+* uPMatrix: 用來儲存投影矩陣
+* uMVMatrix: 用來儲存模型視圖矩陣
+* uNMatrix: 用來儲存法向量矩陣
+* uSampler: 用來儲存材質
+* uMaterialShininess: 用來儲存材質光澤度
+* uPointLightingLocation: 用來儲存光源位置
+* uAmbientColor: 用來儲存環境光顏色
+* uPointLightingDiffuseColor: 用來儲存光源漫反射顏色
+* uPointLightingSpecularColor: 用來儲存光源反射顏色
+* xClipMinUniform: 裁切，用來儲存 xClipMin
+* xClipMaxUniform: 裁切，用來儲存 xClipMax
+* 
+*
+* 一般來說，vertex shader 會將頂點位置 (aVertexPosition) 乘上投影矩陣 (uPMatrix) 和模型視圖矩陣 (uMVMatrix) 後，再傳給 fragment shader。
+* fragment shader 會將頂點法向量 (aVertexNormal) 乘上法向量矩陣 (uNMatrix) 後，再進行光照計算。
+-->
+
+<!-- gouraud vertex shader -->
+<script id="vs_g" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aTextureCoord;
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat3 uNMatrix;
+    varying vec4 fragcolor;
+    uniform float uMaterialShininess;
+    uniform vec3 uAmbientColor;
+    uniform vec3 uPointLightingLocation;
+    uniform vec3 uPointLightingSpecularColor;
+    uniform vec3 uPointLightingDiffuseColor;
+    uniform sampler2D uSampler;
+
+    uniform float xClipMin;
+    uniform float xClipMax;
+
+    vec3 lightColor;
+    vec3 lightWeighting;
+    vec3 lightDirection;
+    vec3 lightDirection_2;
+    vec3 PointLightingLocation_2;
+    vec3 normal;
+    float specularLightWeighting;
+    float specularLightWeighting_2;
+    vec3 eyeDirection;
+    vec3 reflectionDirection;
+    vec3 reflectionDirection_2;
+    float diffuseLightWeighting;
+    float diffuseLightWeighting_2;
+    vec4 fragmentColor;
+
+    void main() {
+        lightColor = vec3(1.0, 1.0, 1.0);
+        lightDirection = normalize(uPointLightingLocation - (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz);
+        PointLightingLocation_2 = vec3(50, 60, -20);
+        lightDirection_2 = normalize(PointLightingLocation_2 - (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz);
+        normal = normalize(uNMatrix * aVertexNormal);
+        specularLightWeighting = 0.0;
+        specularLightWeighting_2 = 0.0;
+        eyeDirection = normalize(-(uMVMatrix * vec4(aVertexPosition, 1.0)).xyz);
+        reflectionDirection = reflect(-lightDirection, normal);
+        reflectionDirection_2 = reflect(-lightDirection_2, normal);
+        specularLightWeighting = pow(max(dot(reflectionDirection, eyeDirection), 0.0), uMaterialShininess);
+        specularLightWeighting_2 = pow(max(dot(reflectionDirection_2, eyeDirection), 0.0), uMaterialShininess);
+        diffuseLightWeighting = max(dot(normal, lightDirection), 0.0);
+        diffuseLightWeighting_2 = max(dot(normal, lightDirection_2), 0.0);
+        lightWeighting = uAmbientColor + uPointLightingSpecularColor * specularLightWeighting + uPointLightingDiffuseColor * diffuseLightWeighting + uPointLightingSpecularColor * specularLightWeighting_2 + uPointLightingDiffuseColor * diffuseLightWeighting_2;
+        fragmentColor = texture2D(uSampler, vec2(aTextureCoord.s, aTextureCoord.t));
+        fragcolor = vec4(fragmentColor.rgb * lightWeighting, fragmentColor.a);
+        
+        //gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+
+        if (aVertexPosition.x < xClipMin || aVertexPosition.x > xClipMax) {
+            // 將頂點位置設置到視野外，這裡將 z 設置為一個非常大的負數
+            gl_Position = vec4(aVertexPosition.xy, -1000.0, 0.0);
+        } else {
+            // 如果頂點在範圍內，則正常計算它的位置
+            gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        }
+    }
+</script>
+
+<!-- phong vertex shader -->
+<script id="vs_p" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aTextureCoord;
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat3 uNMatrix;
+    varying vec2 vTextureCoord;
+    varying vec3 vTransformedNormal;
+    varying vec4 vPosition;
+
+    uniform float xClipMin;
+    uniform float xClipMax;
+
+    void main() {
+        vPosition = uMVMatrix * vec4(aVertexPosition, 1.0);
+        vTextureCoord = aTextureCoord;
+        vTransformedNormal = uNMatrix * aVertexNormal;
+        
+        //gl_Position = uPMatrix * vPosition;
+
+        if (aVertexPosition.x < xClipMin || aVertexPosition.x > xClipMax) {
+            // 將頂點位置設置到視野外，這裡將 z 設置為一個非常大的負數
+            gl_Position = vec4(aVertexPosition.xy, -1000.0, 0.0);
+        } else {
+            // 如果頂點在範圍內，則正常計算它的位置
+            gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        }
+    }
+</script>
+
+<!-- flat vertex shader -->
+<script id="vs_f" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aTextureCoord;
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat3 uNMatrix;
+    varying vec2 vTextureCoord;
+    varying vec3 vTransformedNormal;
+    vec3 PointLightingLocation_2;
+    varying vec4 vColor;
+    varying vec3 vLightDirection;
+    varying vec3 vLightDirection_2;
+    varying vec3 vPosition;
+    uniform vec3 uPointLightingLocation;
+    uniform sampler2D uSampler;
+
+    uniform float xClipMin;
+    uniform float xClipMax;
+
+    void main() {
+        vPosition = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        vLightDirection = normalize(uPointLightingLocation.xyz - vPosition.xyz);
+        PointLightingLocation_2 = vec3(50, 60, -20);
+        vLightDirection_2 = normalize(PointLightingLocation_2 - vPosition.xyz);
+        vColor = texture2D(uSampler, vec2(aTextureCoord.s, aTextureCoord.t));
+        
+        //gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+
+        if (aVertexPosition.x < xClipMin || aVertexPosition.x > xClipMax) {
+            // 將頂點位置設置到視野外，這裡將 z 設置為一個非常大的負數
+            gl_Position = vec4(aVertexPosition.xy, -1000.0, 0.0);
+        } else {
+            // 如果頂點在範圍內，則正常計算它的位置
+            gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        }
+    }
+</script>
+
+
+
+
+
+
+
+<!-- 
+    TODO HERE: 
+    modify fragment shader or write another one
+    to implement flat, gouraud and phong shading
+ -->
+
+<!-- gouraud fragment shader -->
+<script id="fs_g" type="x-shader/x-fragment">
+    precision mediump float;
+    varying vec4 fragcolor;
+    void main() {
+        gl_FragColor = fragcolor;
+    }
+</script>
+
+<!-- phong fragment shader -->
+<script id="fs_p" type="x-shader/x-fragment">
+    precision mediump float;
+
+    varying vec2 vTextureCoord;
+    varying vec3 vTransformedNormal;
+    varying vec4 vPosition;
+    uniform float uMaterialShininess;
+    uniform vec3 uAmbientColor;
+    uniform vec3 uPointLightingLocation;
+    uniform vec3 uPointLightingSpecularColor;
+    uniform vec3 uPointLightingDiffuseColor;
+    uniform sampler2D uSampler;
+
+    vec3 lightWeighting;
+    vec3 lightDirection;
+    vec3 ptLiLoc_2;
+    vec3 lightDirection_2;
+    vec3 normal;
+    float specularLightWeighting;
+    float specularLightWeighting_2;
+    vec3 eyeDirection;
+    vec3 reflectionDirection;
+    vec3 reflectionDirection_2;
+    float diffuseLightWeighting;
+    float diffuseLightWeighting_2;
+    vec4 fragmentColor;
+    
+    void main() {
+        lightDirection = normalize(uPointLightingLocation - vPosition.xyz);
+        ptLiLoc_2 = vec3(50, 60, -20);
+        lightDirection_2 = normalize(ptLiLoc_2 - vPosition.xyz);
+        normal = normalize(vTransformedNormal);
+        specularLightWeighting = 0.0;
+        specularLightWeighting_2 = 0.0;
+        eyeDirection = normalize(-vPosition.xyz);
+        reflectionDirection = reflect(-lightDirection, normal);
+        reflectionDirection_2 = reflect(-lightDirection_2, normal);
+        specularLightWeighting = pow(max(dot(reflectionDirection, eyeDirection), 0.0), uMaterialShininess);
+        specularLightWeighting_2 = pow(max(dot(reflectionDirection_2, eyeDirection), 0.0), uMaterialShininess);
+        diffuseLightWeighting = max(dot(normal, lightDirection), 0.0);
+        diffuseLightWeighting_2 = max(dot(normal, lightDirection_2), 0.0);
+        lightWeighting = uAmbientColor + uPointLightingSpecularColor * specularLightWeighting + uPointLightingDiffuseColor * diffuseLightWeighting + uPointLightingSpecularColor * specularLightWeighting_2 + uPointLightingDiffuseColor * diffuseLightWeighting_2;
+        fragmentColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+        gl_FragColor = vec4(fragmentColor.rgb * lightWeighting, fragmentColor.a);
+    }
+</script>
+
+<!-- flat fragment shader -->
+<script id="fs_f" type="x-shader/x-fragment">
+    #extension GL_OES_standard_derivatives : enable
+    precision mediump float;
+
+    uniform float uMaterialShininess;
+    uniform vec3 uAmbientColor;
+    uniform vec3 uPointLightingSpecularColor;
+    uniform vec3 uPointLightingDiffuseColor;
+    varying vec4 vColor;
+    varying vec3 vLightDirection;
+    varying vec3 vLightDirection_2;
+    varying vec3 vPosition;
+    vec3 dx;
+    vec3 dy;
+    vec3 n;
+    vec3 ld;
+    vec3 ld_2;
+    float specularLightWeighting;
+    float specularLightWeighting_2;
+    vec3 eyeDirection;
+    vec3 reflectionDirection;
+    vec3 reflectionDirection_2;
+    float diffuseLightWeighting;
+    float diffuseLightWeighting_2;
+    vec3 lightWeighting;
+    vec3 d;
+
+    void main(void) {
+        dx = dFdx(vPosition);
+        dy = dFdy(vPosition);
+        n = normalize(cross(dx, dy));
+        ld = normalize(vLightDirection);
+        ld_2 = normalize(vLightDirection_2);
+        specularLightWeighting = 0.0;
+        specularLightWeighting_2 = 0.0;
+        eyeDirection = normalize(-vPosition);
+        reflectionDirection = reflect(-ld, n);
+        reflectionDirection_2 = reflect(-ld_2, n);
+        specularLightWeighting = pow(max(dot(reflectionDirection, eyeDirection), 0.0), uMaterialShininess);
+        specularLightWeighting_2 = pow(max(dot(reflectionDirection_2, eyeDirection), 0.0), uMaterialShininess);
+        diffuseLightWeighting = max(dot(n, ld), 0.0);
+        diffuseLightWeighting_2 = max(dot(n, ld_2), 0.0);
+        lightWeighting = uAmbientColor + uPointLightingSpecularColor * specularLightWeighting + uPointLightingDiffuseColor * diffuseLightWeighting + uPointLightingSpecularColor * specularLightWeighting_2 + uPointLightingDiffuseColor * diffuseLightWeighting_2;
+        d = vColor.rgb * lightWeighting;
+        gl_FragColor = vec4(d, vColor.a);
+    }
+</script>
+
+
+
+
+
+
+
+
+<!-- 主程式區域 -->
+<script type="text/javascript">
+    // WebGL context
+    var gl;
+
+    // 模型視圖矩陣
+    var mvMatrix = mat4.create();
+
+    // 投影矩陣
+    var pMatrix  = mat4.create();
+
+    // 模型頂點位置、法向量、材質座標
+    var teapotVertexPositionBuffer;
+    var teapotVertexNormalBuffer;
+    var teapotVertexTextureCoordBuffer;
+
+    // 模型角度
+    var teapotAngle = 180;
+    
+    // 模型旋轉速度
+    var lastTime    = 0;
+
+    // 光源位置
+    var light_locations = new Float32Array([30., 20., -25.]);
+    
+    // 光澤度
+    var shininess = 32.0;
+
+    // 模型的初始位置
+    var translation = [
+            [-30, 0, -65], // 左
+            [0, 0, -65], // 中
+            [30, 0, -65] // 右
+        ];
+
+    // 讀取 shader 設定 (by ID)
+    var settings = {
+        gouraud: {
+            vertexShader: "vs_g",
+            fragmentShader: "fs_g"
+        },
+        phong: {
+            vertexShader: "vs_p",
+            fragmentShader: "fs_p"
+        },
+        flat: {
+            vertexShader: "vs_f",
+            fragmentShader: "fs_f"
+        }
+    }
+
+    // 存放 shader 初始化設定的變數 
+    var shaders = {};
+
+    // 當前 shader (會在 drawScene() 中被不斷更新)
+    var currentShader = null;
+
+    // 存放材質 (在執行 webGLStart() 的時候被初始化)
+    var textures = []
+
+    // 光源 (助教要求 3 個) (x正=偏右; x負=偏左) (y正=偏上; y負=偏下) (z正=偏模型前方; z負=偏模型後方) 
+    var light_sources = {
+        light_location_0_x: 0.0,
+        light_location_0_y: -100.0,
+        light_location_0_z: 0.0,
+        light_location_1_x: 0.0,
+        light_location_1_y: 0.0,
+        light_location_1_z: 100.0,
+        light_location_2_x: 0.0,
+        light_location_2_y: 100.0,
+        light_location_2_z: 0.0
+    };
+
+    // 裁切範圍
+    var clipping = {
+        gouraud: {
+            xClipMin: -200.0,
+            xClipMax: 0.0
+        },
+        phong: {
+            xClipMin: -200.0,
+            xClipMax: 0.0
+        },
+        flat: {
+            xClipMin: -200.0,
+            xClipMax: 0.0
+        }
+    }
+    
+    // 初始化 WebGL，讓 canvas 能夠使用 WebGL
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+            gl.getExtension('OES_standard_derivatives'); //不加這個的話，會一直報錯，因為 flat shading 需要這個 extension
+            gl.viewportWidth  = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } 
+        catch (e) {
+        }
+
+        if (!gl) {
+            alert("Could not initialise WebGL");
+        }
+    }
+
+    // 讀取 shader
+    function getShader(gl, id) {
+        // 取得 shader script
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        // 讀取 shader script 的內容
+        var shaderSource = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                shaderSource += k.textContent;
+            }
+
+            k = k.nextSibling;
+        }
+
+        // 建立 shader
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } 
+        else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } 
+        else {
+            return null;
+        }
+
+        // 設定 shader 的內容 (來自 GLSL 程式碼)
+        gl.shaderSource(shader, shaderSource);
+
+        // 編譯 shader
+        gl.compileShader(shader);
+
+        // 檢查 shader 是否有誤
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+    // 建立 shader 程式
+    function makeProgram(fs_id, vs_id){
+        // 讀取 shader
+        let vertexShader   = getShader(gl, vs_id);
+        let fragmentShader = getShader(gl, fs_id);
+
+        // 建立 shader 程式
+        let shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        /**
+         * 程式中，我們用到的 OpenGL Shading Language (GLSL) 變數有:
+         * aVertexPosition: 用來儲存模型的頂點位置
+         * aVertexNormal: 用來儲存模型的頂點法向量
+         * aTextureCoord: 用來儲存模型的材質座標
+         * uPMatrix: 用來儲存投影矩陣
+         * uMVMatrix: 用來儲存模型視圖矩陣
+         * uNMatrix: 用來儲存法向量矩陣
+         * uSampler: 用來儲存材質
+         * uMaterialShininess: 用來儲存材質光澤度
+         * uPointLightingLocation: 用來儲存光源位置
+         * uAmbientColor: 用來儲存環境光顏色
+         * uPointLightingDiffuseColor: 用來儲存光源漫反射顏色
+         * uPointLightingSpecularColor: 用來儲存光源反射顏色
+         * xClipMinUniform: 裁切，用來儲存 xClipMin
+         * xClipMaxUniform: 裁切，用來儲存 xClipMax
+         */
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        // console.log(shaderProgram.vertexNormalAttribute); // flat 造成警告，因為在 flat shading 中沒有使用 vertexNormal
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+        shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+        gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+        shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+        shaderProgram.nMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix");
+        shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+        shaderProgram.materialShininessUniform = gl.getUniformLocation(shaderProgram, "uMaterialShininess");
+        shaderProgram.ambientColorUniform = gl.getUniformLocation(shaderProgram, "uAmbientColor");
+        shaderProgram.pointLightingLocationUniform = gl.getUniformLocation(shaderProgram, "uPointLightingLocation");
+        shaderProgram.pointLightingSpecularColorUniform = gl.getUniformLocation(shaderProgram, "uPointLightingSpecularColor");
+        shaderProgram.pointLightingDiffuseColorUniform = gl.getUniformLocation(shaderProgram, "uPointLightingDiffuseColor");
+        shaderProgram.xClipMinUniform = gl.getUniformLocation(shaderProgram, "xClipMin");
+        shaderProgram.xClipMaxUniform = gl.getUniformLocation(shaderProgram, "xClipMax");
+
+        return shaderProgram;
+    }
+
+    // 初始化 shader
+    function initShaders() {
+        shaders.gouraud = makeProgram(settings.gouraud.fragmentShader, settings.gouraud.vertexShader);
+        shaders.phong = makeProgram(settings.phong.fragmentShader, settings.phong.vertexShader);
+        shaders.flat = makeProgram(settings.flat.fragmentShader, settings.flat.vertexShader);
+    }
+
+    // 處理讀取後的材質 (圖片)
+    function handleLoadedTexture(texture) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+	}
+
+    // 讀取材質
+    function initTextures(filename) {
+        var newText = gl.createTexture();
+        newText.image = new Image();
+        newText.image.onload = function () {
+            handleLoadedTexture(newText)
+        }
+        newText.image.src = filename;
+        textures.push(newText);
+    }
+
+    // 設定材質
+    function setTextures(filename, i) {
+        var newText = gl.createTexture();
+        newText.image = new Image();
+        newText.image.onload = function () {
+            handleLoadedTexture(newText)
+        }
+        newText.image.src = filename;
+        textures[i] = newText;
+    }
+
+    // 角度轉弧度
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    // 讀取模型 (JSON 檔案的內容，Object 格式)
+    function handleLoadedTeapot(teapotData) {
+        teapotVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexPositions), gl.STATIC_DRAW);
+        teapotVertexPositionBuffer.itemSize = 3;
+        teapotVertexPositionBuffer.numItems = teapotData.vertexPositions.length / 3;
+
+        teapotVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexNormals), gl.STATIC_DRAW);
+        teapotVertexNormalBuffer.itemSize = 3;
+        teapotVertexNormalBuffer.numItems = teapotData.vertexNormals.length / 3;
+
+        // 助教說加入這個可以放置材質
+        teapotVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexTextureCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexTextureCoords), gl.STATIC_DRAW);
+        teapotVertexTextureCoordBuffer.itemSize = 2;
+        teapotVertexTextureCoordBuffer.numItems = teapotData.vertexTextureCoords.length / 2;
+    }
+
+    // 讀取模型 (註: 只有 Teapot.json 有 textureCoords, 其它的沒有)
+    function loadTeapot() {
+        var request = new XMLHttpRequest();
+        request.open("GET", "./model/Teapot.json");
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedTeapot(JSON.parse(request.responseText));
+            }
+        }
+        request.send();
+    }
+
+
+    /*
+        TODO HERE:
+        add two or more objects showing on the canvas
+        (it needs at least three objects showing at the same time)
+    */
+
+    // 繪製場景 (模型外觀)
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        if (teapotVertexPositionBuffer   == null || 
+            teapotVertexNormalBuffer     == null || 
+            teapotVertexTextureCoordBuffer == null) {
+            return;
+        }
+
+        // 繪製模型
+        for(let i = 0; i < Object.keys(shaders).length; i++){
+            // 切換 shader (gouraud, phong, flat)
+            currentShader = shaders[Object.keys(shaders)[i]];
+            gl.useProgram(currentShader);
+
+            // 設定視角
+            mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+
+            // 設定模型視圖矩陣
+            mat4.identity(mvMatrix);
+
+            // 平移設定
+            mat4.translate(mvMatrix, translation[i]); // 這裡是模型的初始位置
+            mat4.translate(mvMatrix, update_trans());
+            
+            // 旋轉設定
+            var rotateVec = update_rotate();
+            mat4.rotate(mvMatrix, degToRad(rotateVec[0]), [1, 0, 0]);
+            mat4.rotate(mvMatrix, degToRad(rotateVec[1] + teapotAngle), [0, 1, 0]);
+            mat4.rotate(mvMatrix, degToRad(rotateVec[2]), [0, 0, 1]);
+
+            // 剪切設定
+            var newShearMatrix = mat4.create();
+            mat4.identity(newShearMatrix);
+            newShearMatrix[1] = update_shear();
+            mat4.multiply(newShearMatrix, mvMatrix, mvMatrix);
+
+            // 縮放設定
+            mat4.scale(mvMatrix, update_scale());
+
+            // 初始化光源
+            var objAmbient = {ambientR: 0.1, ambientG: 0.1, ambientB: 0.1};
+            gl.uniform3f(currentShader.ambientColorUniform, objAmbient.ambientR, objAmbient.ambientG, objAmbient.ambientB); // ambientR, ambientG, ambientB
+
+            // 設定光源
+            var lightLocArr = [];
+            var lightEnabledArr = [1.0];
+            var objSpecular = {specularR: 0.8, specularG: 0.8, specularB: 0.8};
+            var objDisffuse = {diffuseR: 0.8, diffuseG: 0.8, diffuseB: 0.8};
+            var checkbox = document.querySelector(`input#light_location_${i}`);
+            if (checkbox.checked){
+                // 光源位置
+                lightLocArr.push(parseFloat(light_sources["light_location_" + i + "_x"]));
+                lightLocArr.push(parseFloat(light_sources["light_location_" + i + "_y"]));
+                lightLocArr.push(parseFloat(light_sources["light_location_" + i + "_z"]));
+
+                // 自訂光源
+                gl.uniform3fv(currentShader.pointLightingLocationUniform,  lightLocArr); // lightPositionX, lightPositionY, lightPositionZ
+                gl.uniform3f(currentShader.pointLightingSpecularColorUniform, objSpecular.specularR, objSpecular.specularG, objSpecular.specularB); // specularR, specularG, specularB
+                gl.uniform3f(currentShader.pointLightingDiffuseColorUniform, objDisffuse.diffuseR, objDisffuse.diffuseG, objDisffuse.diffuseB);// diffuseR, diffuseG, diffuseB
+
+                // 開啟光源
+                gl.uniform1fv(currentShader.pointLightingEnabledUniform, lightEnabledArr);
+            } else {
+                gl.uniform3f(currentShader.pointLightingSpecularColorUniform, 0.1, 0.1, 0.1); // specularR, specularG, specularB
+                gl.uniform3f(currentShader.pointLightingDiffuseColorUniform, 0.1, 0.1, 0.1);// diffuseR, diffuseG, diffuseB
+            }
+
+            // 設定材質
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, textures[i]);
+            gl.uniform1i(currentShader.samplerUniform, 0);
+
+            // 光澤設定
+            gl.uniform1f(currentShader.materialShininessUniform, shininess);
+
+            // 設定模型的頂點位置
+            gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexPositionBuffer);
+            gl.vertexAttribPointer(currentShader.vertexPositionAttribute, teapotVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+            // 設定模型的材質座標
+            gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexTextureCoordBuffer);
+            gl.vertexAttribPointer(currentShader.textureCoordAttribute, teapotVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+            // 設定模型的法向量
+            gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexNormalBuffer);
+            gl.vertexAttribPointer(currentShader.vertexNormalAttribute, teapotVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+            // 將投影矩陣、模型視圖矩陣、法向量矩陣傳給 shader
+            gl.uniformMatrix4fv(currentShader.pMatrixUniform, false, pMatrix);
+            gl.uniformMatrix4fv(currentShader.mvMatrixUniform, false, mvMatrix);
+            var normalMatrix = mat3.create();
+            mat4.toInverseMat3(mvMatrix, normalMatrix);
+            mat3.transpose(normalMatrix);
+            gl.uniformMatrix3fv(currentShader.nMatrixUniform, false, normalMatrix);
+
+            // 對每個 shader 設置 xClipMin 和 xClipMax
+            var checkbox_clip = document.querySelector(`input#clipping_${i}`);
+            if (checkbox_clip.checked){
+                gl.uniform1f(currentShader.xClipMinUniform, clipping[Object.keys(shaders)[i]].xClipMin);
+                gl.uniform1f(currentShader.xClipMaxUniform, clipping[Object.keys(shaders)[i]].xClipMax);
+            } else {
+                gl.uniform1f(currentShader.xClipMinUniform, -200.0);
+                gl.uniform1f(currentShader.xClipMaxUniform, 200.0);
+            }
+
+            // 繪製模型
+            gl.drawArrays(gl.TRIANGLES, 0, teapotVertexNormalBuffer.numItems);
+        }
+    }
+
+    // 動態更新模型角度
+    function animate() {
+        var timeNow = new Date().getTime();
+        if (lastTime != 0) {
+            var elapsed = timeNow - lastTime;
+            teapotAngle += 0.03 * elapsed;
+        }
+        
+        lastTime = timeNow;
+    }
+
+    // 動畫 (透過回呼)
+    function tick() {
+        // 讓動畫一格一格畫下去，大約 1/60 秒呼叫一次 tick()
+        requestAnimFrame(tick);
+
+        // 繪製模型
+        drawScene();
+
+        // 動態更新模型角度
+        animate();
+    }
+
+    // 主程式 (初始化 WebGL、shader、材質、模型、動畫)
+    function webGLStart() {
+        // 建立 canvas
+        var canvas = document.getElementById("ICG-canvas");
+        initGL(canvas);
+
+        // 初始化 shader
+        initShaders();
+
+        // 貼材質
+        initTextures("images/galvanized.jpg"); // gouraud
+        initTextures("images/galvanized.jpg"); // phong
+        initTextures("images/galvanized.jpg"); // flat
+
+        // 讀取模型
+        loadTeapot();
+
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+        // 播放動畫
+        tick();
+    }
+
+
+    /**
+     * 
+     * 自訂函式
+     * 
+     */
+
+    // 平移
+    function update_trans(){
+        var tx = document.getElementById("transX").value;
+        var ty = document.getElementById("transY").value;
+        var tz = document.getElementById("transZ").value;
+        return vec3.create([tx, ty, tz]);
+    }
+
+    // 旋轉
+    function update_rotate(){
+        var rx = document.getElementById("rotateX").value;
+        var ry = document.getElementById("rotateY").value;
+        var rz = document.getElementById("rotateZ").value;
+        return vec3.create([rx, ry, rz]);
+    }
+
+    // 剪切
+    function update_shear(){
+        var sx = document.getElementById("shearX").value;
+        return sx;
+    }
+
+    // 縮放
+    function update_scale(){
+        var scx = document.getElementById("scaleX").value;
+        return vec3.create([scx, scx, scx]);
+    }
+</script>
+</head>
+
+<body onload="webGLStart();">
+    <!-- 用 bootstrap 建立的 layout -->
+    <div class="container">
+        <div class="row d-flex justify-content-center"><canvas id="ICG-canvas" class="w-75 p-1"></canvas></div>
+        <div class="row pt-3 pb-3">
+            <h4 class="d-flex justify-content-center"><span class="badge text-bg-secondary">Basic Settings</span></h4>
+        </div>
+        <div class="row mb-5">
+
+            <!-- Gouraud -->
+            <div class="col">
+                <div class="row pt-2 pb-2"><div class="text-bg-secondary p-2 d-flex justify-content-center">Gouraud shading</div></div>
+                <div class="row mb-3">
+                    <div class="col-5">Texture: </div>
+                    <div class="col-7">
+                        <select id="texture_g">
+                            <option value="galvanized.jpg" selected>galvanized</option>
+                            <option value="earth.jpg">earth</option>
+                            <option value="red.jpg">red</option>
+                            <option value="pokemon.jpg">pokemon</option>
+                            <option value="stars.jpg">stars</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-5">Clipping: </div>
+                    <div class="col-7">
+                        <input type="checkbox" id="clipping_0">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-5">Light (由下往上打燈): </div>
+                    <div class="col-7">
+                        <input type="checkbox" id="light_location_0">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Phong -->
+            <div class="col">
+                <div class="row pt-2 pb-2"><div class="text-bg-secondary p-2 d-flex justify-content-center">Phong shading</div></div>
+                <div class="row mb-3">
+                    <div class="col-5">Texture: </div>
+                    <div class="col-7">
+                        <select id="texture_p">
+                            <option value="galvanized.jpg" selected>galvanized</option>
+                            <option value="earth.jpg">earth</option>
+                            <option value="red.jpg">red</option>
+                            <option value="pokemon.jpg">pokemon</option>
+                            <option value="stars.jpg">stars</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-5">Clipping: </div>
+                    <div class="col-7">
+                        <input type="checkbox" id="clipping_1">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-5">Light (往正前方打燈):</div>
+                    <div class="col-7">
+                        <input type="checkbox" id="light_location_1">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Flat -->
+            <div class="col">
+                <div class="row pt-2 pb-2"><div class="text-bg-secondary p-2 d-flex justify-content-center">Flat shading</div></div>
+                <div class="row mb-3">
+                    <div class="col-5">Texture: </div>
+                    <div class="col-7">
+                        <select id="texture_f">
+                            <option value="galvanized.jpg" selected>galvanized</option>
+                            <option value="earth.jpg">earth</option>
+                            <option value="red.jpg">red</option>
+                            <option value="pokemon.jpg">pokemon</option>
+                            <option value="stars.jpg">stars</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-5">Clipping: </div>
+                    <div class="col-7">
+                        <input type="checkbox" id="clipping_2">
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-5">Light (由上往下打燈):</div>
+                    <div class="col-7">
+                        <input type="checkbox" id="light_location_2">
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+        <!-- <div class="row pt-3 pb-3">
+            <h4 class="d-flex justify-content-center"><span class="badge text-bg-secondary">Fundamental Transformations</span></h4>
+        </div> -->
+
+        <div class="row mb-5">
+            <div class="col">
+                <div class="row">
+                    <div class="row"><div class="text-bg-secondary p-2 d-flex justify-content-center">Translations</div></div>
+                    <div class="row">
+                        <div class="col p-2">
+                            X axis: <input id="transX" type="range" autocomplete="off" value="0." max="50." min="-50." oninput="update_trans()">
+                        </div>
+                        <div class="col p-2">
+                            Y axis: <input id="transY" type="range" autocomplete="off" value="0." max="50." min="-50." oninput="update_trans()">
+                        </div>
+                        <div class="col p-2">
+                            Z axis: <input id="transZ" type="range" autocomplete="off" value="0" max="50." min="-50." oninput="update_trans()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col">
+                <div class="row">
+                    <div class="row"><div class="text-bg-secondary p-2 d-flex justify-content-center">Rotation</div></div>
+                    <div class="row">
+                        <div class="col p-2">
+                            X axis: <input id="rotateX" type="range" autocomplete="off" value="0." max="180." min="-180." oninput="update_rotate()">
+                        </div>
+                        <div class="col p-2">
+                            Y axis: <input id="rotateY" type="range" autocomplete="off" value="0." max="180." min="-180." oninput="update_rotate()">
+                        </div>
+                        <div class="col p-2">
+                            Z axis: <input id="rotateZ" type="range" autocomplete="off" value="0." max="180." min="-180." oninput="update_rotate()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="row mb-5">
+            <div class="col">
+                <div class="row">
+                    <div class="row"><div class="text-bg-secondary p-2 d-flex justify-content-center">Shear</div></div>
+                    <div class="row">
+                        <div class="col p-2">
+                            <input id="shearX" type="range" class="w-100" autocomplete="off" value="0." max="1." min="-1." step="0.05" oninput="update_shear()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col">
+                <div class="row">
+                    <div class="row"><div class="text-bg-secondary p-2 d-flex justify-content-center">Scale</div></div>
+                    <div class="row">
+                        <div class="col p-2">
+                            <input id="scaleX" type="range" class="w-100" autocomplete="off" value="1." max="3." min="0." step="0.05" oninput="update_scale()">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script type="text/javascript">
+        /**
+         * 
+         * 自訂事件
+         * 
+         */
+        
+        // 更換材質
+        document.getElementById("texture_g").onchange = function(){ setTextures(`images/${this.value}`, 0); }
+        document.getElementById("texture_p").onchange = function(){ setTextures(`images/${this.value}`, 1); }
+        document.getElementById("texture_f").onchange = function(){ setTextures(`images/${this.value}`, 2); }
+
+
+    </script>
+</body>
+
+</html>
